@@ -1,21 +1,31 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { supabase } from '../supabase';
-import { LogIn, Sparkles, ShieldCheck, Zap } from 'lucide-react';
+import { auth, googleProvider } from '../firebase';
+import { signInWithPopup } from 'firebase/auth';
+import { LogIn, Sparkles, ShieldCheck, Zap, Loader2 } from 'lucide-react';
 
 const LoginView: React.FC = () => {
+  const [isLoading, setIsLoading] = useState(false);
+
   const handleLogin = async () => {
+    if (isLoading) return;
+    
+    setIsLoading(true);
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: 'http://localhost:3000/'
-        }
-      });
-      if (error) throw error;
-    } catch (error) {
+      googleProvider.setCustomParameters({ prompt: 'select_account' });
+      await signInWithPopup(auth, googleProvider);
+    } catch (error: any) {
       console.error("Login failed:", error);
-      alert("登入遇到問題：" + (error as Error)?.message);
+      // Show error to user since console is hidden
+      if (error.code === 'auth/popup-blocked') {
+        alert("登入視窗被瀏覽器封鎖了，請允許彈出視窗後再試一次。");
+      } else if (error.code === 'auth/popup-closed-by-user') {
+        // User closed the popup, no need for alert
+      } else {
+        alert(`登入失敗: ${error.message}`);
+      }
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -65,13 +75,18 @@ const LoginView: React.FC = () => {
         </div>
 
         <motion.button
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
+          whileHover={{ scale: isLoading ? 1 : 1.05 }}
+          whileTap={{ scale: isLoading ? 1 : 0.95 }}
           onClick={handleLogin}
-          className="w-full bg-white text-indigo-600 py-5 rounded-[2rem] font-black text-lg shadow-2xl flex items-center justify-center gap-3 hover:bg-gray-50 transition-colors"
+          disabled={isLoading}
+          className={`w-full bg-white text-indigo-600 py-5 rounded-[2rem] font-black text-lg shadow-2xl flex items-center justify-center gap-3 transition-all ${isLoading ? 'opacity-70 cursor-not-allowed' : 'hover:bg-gray-50'}`}
         >
-          <LogIn size={24} />
-          使用 Google 帳號登入
+          {isLoading ? (
+            <Loader2 size={24} className="animate-spin" />
+          ) : (
+            <LogIn size={24} />
+          )}
+          {isLoading ? '正在開啟登入視窗...' : '使用 Google 帳號登入'}
         </motion.button>
         
         <p className="mt-8 text-xs text-white/50 font-medium">

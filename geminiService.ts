@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
 
-const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY || '' });
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
 export const generateTaskBreakdown = async (mainTask: string) => {
   try {
@@ -30,7 +30,7 @@ export const generateTaskBreakdown = async (mainTask: string) => {
   }
 };
 
-export const chatWithAssistant = async (message: string, history: { role: 'user' | 'bot', text: string }[]) => {
+export const chatWithAssistant = async (message: string, history: {role: 'user' | 'bot', text: string}[]) => {
   try {
     const now = new Date();
     const dateStr = now.toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '-');
@@ -94,7 +94,7 @@ export const chatWithAssistant = async (message: string, history: { role: 'user'
         }
       }
     });
-
+    
     const result = JSON.parse(response.text);
     if (result.text) result.text = result.text.replace(/\*\*|###|#/g, '');
     return result;
