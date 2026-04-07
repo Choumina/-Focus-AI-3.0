@@ -1,10 +1,8 @@
-
 import React, { useState, useEffect } from 'react';
 import { AppRoute, Task, CalendarEvent } from './types';
 import { Plus, Loader2 } from 'lucide-react';
-import { auth, db, handleFirestoreError, OperationType } from './firebase';
-import { onAuthStateChanged, User as FirebaseUser, signOut, deleteUser } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { supabase, handleSupabaseError, OperationType } from './supabase';
+import { User } from '@supabase/supabase-js';
 import HomeView from './components/HomeView';
 import FocusTimerView from './components/FocusTimerView';
 import TasksView from './components/TasksView';
@@ -30,7 +28,7 @@ import ConfirmationModal from './components/ConfirmationModal';
 
 const App: React.FC = () => {
   const [currentRoute, setCurrentRoute] = useState<AppRoute>(AppRoute.HOME);
-  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState<boolean | null>(null);
   const [hasCompletedTour, setHasCompletedTour] = useState<boolean | null>(null);
@@ -72,85 +70,94 @@ const App: React.FC = () => {
 
   // Auth & Data Fetching
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      setUser(firebaseUser);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      const sbUser = session?.user || null;
+      setUser(sbUser);
       setIsAuthReady(true);
 
-      if (firebaseUser) {
+      if (sbUser) {
         setIsLoadingData(true);
-        const userDocRef = doc(db, 'users', firebaseUser.uid);
         try {
-          const userDoc = await getDoc(userDocRef);
-          if (userDoc.exists()) {
-            const data = userDoc.data();
-            setHasCompletedOnboarding(data.hasCompletedOnboarding ?? false);
-            setHasCompletedTour(data.hasCompletedTour ?? false);
-            // Load data from Firestore
+          const { data, error } = await supabase
+            .from('users')
+            .select('*')
+            .eq('id', sbUser.id)
+            .single();
+
+          if (data) {
+            setHasCompletedOnboarding(data.has_completed_onboarding ?? false);
+            setHasCompletedTour(data.has_completed_tour ?? false);
+            // Load data from Supabase DB
             if (data.points !== undefined) _setCoins(data.points);
             if (data.tasks) setTasks(data.tasks);
-            if (data.homeConfig) setHomeSections(data.homeConfig);
-            if (data.placedItems) setPlacedItems(data.placedItems);
-            if (data.userProfile) setUserProfile(data.userProfile);
-          } else {
-            // New user
+            if (data.home_config) setHomeSections(data.home_config);
+            if (data.placed_items) setPlacedItems(data.placed_items);
+            if (data.user_profile) setUserProfile(data.user_profile);
+          } else if (error && error.code === 'PGRST116') {
+            // New user (not found)
             setHasCompletedOnboarding(false);
             setHasCompletedTour(false);
             const initialData = {
-              uid: firebaseUser.uid,
-              email: firebaseUser.email,
-              displayName: firebaseUser.displayName,
+              id: sbUser.id,
+              email: sbUser.email,
+              display_name: sbUser.user_metadata?.full_name || 'Focus User',
               points: 0,
-              hasCompletedOnboarding: false,
-              hasCompletedTour: false,
-              createdAt: new Date().toISOString(),
-              homeConfig: ['focus', 'calendar', 'games'],
-              placedItems: placedItems,
+              has_completed_onboarding: false,
+              has_completed_tour: false,
+              home_config: ['focus', 'calendar', 'games'],
+              placed_items: placedItems,
               tasks: [
                 { id: '1', title: '閱讀天龍八部第二章', dueDate: '2026/06/25', completed: false },
                 { id: '2', title: '畢業展作品繳交', dueDate: '2026/08/07', completed: false },
               ],
-              userProfile: {
+              user_profile: {
                 ...userProfile,
-                name: firebaseUser.displayName || 'Focus User',
-                email: firebaseUser.email || 'user@example.com',
+                name: sbUser.user_metadata?.full_name || 'Focus User',
+                email: sbUser.email || 'user@example.com',
                 registrationDate: new Date().toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' })
               }
             };
-            await setDoc(userDocRef, initialData);
+            await supabase.from('users').insert(initialData);
             setTasks(initialData.tasks);
-            setUserProfile(initialData.userProfile);
+            setUserProfile(initialData.user_profile as any);
+          } else if (error) {
+            console.error("Fetch user error:", error);
           }
         } catch (error) {
-          handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
+          handleSupabaseError(error, OperationType.GET, `users/${sbUser.id}`);
         } finally {
           setIsLoadingData(false);
         }
+      } else {
+        setIsLoadingData(false);
       }
     });
-    return () => unsubscribe();
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
 
-  // Sync state to Firestore when it changes
+  // Sync state to Supabase when it changes
   useEffect(() => {
     if (!user || isLoadingData) return;
     const syncData = async () => {
       try {
-        await updateDoc(doc(db, 'users', user.uid), {
+        await supabase.from('users').update({
           points: coins,
           tasks: tasks,
-          homeConfig: homeSections,
-          placedItems: placedItems,
-          userProfile: userProfile,
-          hasCompletedOnboarding: hasCompletedOnboarding,
-          hasCompletedTour: hasCompletedTour
-        });
+          home_config: homeSections,
+          placed_items: placedItems,
+          user_profile: userProfile,
+          has_completed_onboarding: hasCompletedOnboarding,
+          has_completed_tour: hasCompletedTour
+        }).eq('id', user.id);
       } catch (error) {
         // Silent fail for background sync or handle if critical
       }
     };
     const timer = setTimeout(syncData, 2000); // Debounce sync
     return () => clearTimeout(timer);
-  }, [coins, tasks, homeSections, placedItems, userProfile.level, hasCompletedOnboarding, user, isLoadingData]);
+  }, [coins, tasks, homeSections, placedItems, userProfile.level, hasCompletedOnboarding, hasCompletedTour, user, isLoadingData]);
 
   const MAX_COINS = 9999;
 
@@ -160,21 +167,6 @@ const App: React.FC = () => {
       return Math.max(0, Math.min(next, MAX_COINS));
     });
   };
-
-  // Persistence effects - Disabled in favor of Firestore
-  /*
-  useEffect(() => { localStorage.setItem('focus_coins', coins.toString()); }, [coins]);
-  useEffect(() => { localStorage.setItem('focus_tasks', JSON.stringify(tasks)); }, [tasks]);
-  useEffect(() => { localStorage.setItem('focus_archived_tasks', JSON.stringify(archivedTasks)); }, [archivedTasks]);
-  useEffect(() => { localStorage.setItem('focus_home_sections', JSON.stringify(homeSections)); }, [homeSections]);
-  useEffect(() => { localStorage.setItem('focus_active_areas', JSON.stringify(activeAreas)); }, [activeAreas]);
-  useEffect(() => { localStorage.setItem('focus_placed_items', JSON.stringify(placedItems)); }, [placedItems]);
-  useEffect(() => { localStorage.setItem('focus_purchased_backgrounds', JSON.stringify(purchasedBackgrounds)); }, [purchasedBackgrounds]);
-  useEffect(() => { localStorage.setItem('focus_area_backgrounds', JSON.stringify(areaBackgrounds)); }, [areaBackgrounds]);
-  useEffect(() => { localStorage.setItem('focus_area_names', JSON.stringify(areaNames)); }, [areaNames]);
-  useEffect(() => { localStorage.setItem('focus_user_profile', JSON.stringify(userProfile)); }, [userProfile]);
-  useEffect(() => { localStorage.setItem('focus_last_bet', lastBetAmount.toString()); }, [lastBetAmount]);
-  */
 
   const [timerTotalTime, setTimerTotalTime] = useState(2400);
   const [timerTimeLeft, setTimerTimeLeft] = useState(2400);
@@ -193,7 +185,6 @@ const App: React.FC = () => {
     };
     
     resetScroll();
-    // Use requestAnimationFrame and setTimeout to ensure scroll is reset after all renders and dnd-kit cleanups
     requestAnimationFrame(resetScroll);
     const timer = setTimeout(resetScroll, 50);
     return () => clearTimeout(timer);
@@ -226,14 +217,11 @@ const App: React.FC = () => {
     const checkLevelUp = () => {
       let canLevelUp = false;
       
-      // Condition 1: 10+ emojis
       const emojiCount = placedItems.filter(item => !['📺', '🚽', '🛁', '🚪', '🖼️'].includes(item.char)).length;
       const has10Emojis = emojiCount >= 10;
 
-      // Condition 2: Win 2 horse races (tracked in winsTowardsNextLevel)
       const has2Wins = userProfile.winsTowardsNextLevel >= 2;
 
-      // Condition 3: Visited all main routes (as a proxy for "clicked every button")
       const mainRoutes = [
         AppRoute.HOME, AppRoute.FOCUS_TIMER, AppRoute.TASKS, 
         AppRoute.GAME_PETS, AppRoute.GAME_RACE, AppRoute.LEADERBOARD, 
@@ -247,8 +235,6 @@ const App: React.FC = () => {
           ...prev,
           level: prev.level + 1,
           winsTowardsNextLevel: has2Wins ? 0 : prev.winsTowardsNextLevel,
-          // We don't reset visitedRoutes or emojiCount as they are cumulative/state-based
-          // but for wins we reset as requested "升級後記得重新計算"
         }));
         alert(`恭喜！你升到了 Lv.${userProfile.level + 1}`);
       }
@@ -392,9 +378,9 @@ const App: React.FC = () => {
     setHasCompletedOnboarding(true);
     if (user) {
       try {
-        await updateDoc(doc(db, 'users', user.uid), { hasCompletedOnboarding: true });
+        await supabase.from('users').update({ has_completed_onboarding: true }).eq('id', user.id);
       } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}`);
+        handleSupabaseError(error, OperationType.UPDATE, `users/${user.id}`);
       }
     }
   };
@@ -404,9 +390,9 @@ const App: React.FC = () => {
     setHasCompletedTour(true);
     if (user) {
       try {
-        await updateDoc(doc(db, 'users', user.uid), { hasCompletedTour: true });
+        await supabase.from('users').update({ has_completed_tour: true }).eq('id', user.id);
       } catch (error) {
-        handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}`);
+        handleSupabaseError(error, OperationType.UPDATE, `users/${user.id}`);
       }
     }
   };
@@ -414,9 +400,8 @@ const App: React.FC = () => {
   const handleLogout = async () => {
     try {
       setIsLoadingData(true);
-      await signOut(auth);
+      await supabase.auth.signOut();
       
-      // Reset local states to default values
       _setCoins(0);
       setTasks([]);
       setArchivedTasks([]);
@@ -463,15 +448,13 @@ const App: React.FC = () => {
     try {
       setIsLoadingData(true);
       setShowDeleteConfirm(false);
-      const uid = user.uid;
       
-      // 1. Delete Firestore data
-      await deleteDoc(doc(db, 'users', uid));
+      await supabase.from('users').delete().eq('id', user.id);
       
-      // 2. Delete Auth user
-      await deleteUser(user);
+      /* Note: True user deletion usually requires admin privileges or an Edge Function in Supabase. */
+      /* This will clear the user's data and sign them out locally. */
+      await supabase.auth.signOut();
       
-      // 3. Reset local states
       _setCoins(0);
       setTasks([]);
       setArchivedTasks([]);
@@ -501,12 +484,7 @@ const App: React.FC = () => {
       setCurrentRoute(AppRoute.HOME);
     } catch (error: any) {
       console.error('Delete account failed:', error);
-      if (error.code === 'auth/requires-recent-login') {
-        alert('為了安全起見，刪除帳號需要您近期曾進行過登入。請重新登入後再試一次。');
-        await signOut(auth);
-      } else {
-        alert('刪除帳號失敗，請稍後再試。');
-      }
+      alert('刪除帳號失敗，請稍後再試。');
     } finally {
       setIsLoadingData(false);
     }
@@ -514,7 +492,6 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (currentRoute === AppRoute.PROFILE && hasCompletedTour === false && !isTourVisible) {
-      // Small delay to ensure elements are rendered
       const timer = setTimeout(() => setIsTourVisible(true), 500);
       return () => clearTimeout(timer);
     }
@@ -612,12 +589,10 @@ const App: React.FC = () => {
           {renderView()}
         </div>
       </main>
-      {/* 只有在非 AI 聊天頁面才顯示全域導覽列 */}
       {currentRoute !== AppRoute.AI_CHAT && (
         <Navigation currentRoute={currentRoute} navigateTo={navigateTo} fab={renderFAB()} />
       )}
       
-      {/* 遊戲子導覽列 - 當在遊戲相關頁面時顯示 */}
       {[AppRoute.GAME_PETS, AppRoute.GAME_RACE, AppRoute.LEADERBOARD].includes(currentRoute) && (
         <GameNavigation currentRoute={currentRoute} navigateTo={navigateTo} />
       )}
@@ -625,4 +600,30 @@ const App: React.FC = () => {
   );
 };
 
-export default App;
+class ErrorBoundary extends React.Component<{children: React.ReactNode}, {hasError: boolean, error: Error | null}> {
+  public props: { children: React.ReactNode };
+  public state = { hasError: false, error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 20, color: 'red', background: 'white' }}>
+          <h1>Something went wrong.</h1>
+          <pre>{this.state.error?.toString()}</pre>
+          <pre>{this.state.error?.stack}</pre>
+        </div>
+      );
+    }
+    return this.props.children; 
+  }
+}
+
+export default function AppWithErrorBoundary() {
+  return (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  );
+}

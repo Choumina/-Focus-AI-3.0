@@ -1,15 +1,21 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { auth, googleProvider } from '../firebase';
-import { signInWithPopup } from 'firebase/auth';
+import { supabase } from '../supabase';
 import { LogIn, Sparkles, ShieldCheck, Zap } from 'lucide-react';
 
 const LoginView: React.FC = () => {
   const handleLogin = async () => {
     try {
-      await signInWithPopup(auth, googleProvider);
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: 'http://localhost:3000/'
+        }
+      });
+      if (error) throw error;
     } catch (error) {
       console.error("Login failed:", error);
+      alert("登入遇到問題：" + (error as Error)?.message);
     }
   };
 
